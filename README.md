@@ -1,3 +1,21 @@
+&#x20;---
+
+title: Grievance AI System
+
+emoji: 🏛️
+
+colorFrom: blue
+
+colorTo: green
+
+sdk: docker
+
+pinned: false
+
+app\_port: 7860
+
+\---
+
 \# AI-Driven Citizen Grievance \& Sentiment Analysis System
 
 
