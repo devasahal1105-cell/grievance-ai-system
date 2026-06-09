@@ -1,25 +1,56 @@
 from fastapi import FastAPI
-from api.routes import router
-import nltk
 
-nltk.download('punkt', quiet=True)
-nltk.download('stopwords', quiet=True)
-nltk.download('wordnet', quiet=True)
-nltk.download('punkt_tab', quiet=True)
+from api.routes import (
+    router
+)
+
+from api.middleware import (
+    log_requests
+)
 
 app = FastAPI(
-    title="AI Grievance System",
-    description="Citizen complaint classifier & sentiment analyser",
+
+    title="Government Grievance AI System",
+
+    description=(
+        "AI-powered grievance classification, "
+        "sentiment analysis and urgency detection system."
+    ),
+
     version="1.0.0"
 )
 
-app.include_router(router)
+# Register Middleware
+
+app.middleware(
+    "http"
+)(
+    log_requests
+)
+
+# Register Routes
+
+app.include_router(
+
+    router,
+
+    prefix="/api/v1",
+
+    tags=["Grievance AI"]
+)
+
 
 @app.get("/")
-def health_check():
-    return {"status": "running", "version": "1.0.0"}
+def root():
 
-@app.get("/model/info")
-def model_info():
-    return {"model": "TF-IDF + Logistic Regression",
-            "classes": ["Electricity", "Roads", "Sanitation", "Transport", "Water Supply"]}
+    return {
+
+        "message":
+            "Government Grievance AI System",
+
+        "swagger":
+            "/docs",
+
+        "version":
+            "1.0.0"
+    }

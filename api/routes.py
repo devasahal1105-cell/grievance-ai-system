@@ -1,70 +1,352 @@
-from fastapi import APIRouter
-from api.schemas import ComplaintRequest, PredictionResponse
-from textblob import TextBlob
-import joblib, json, re, nltk, os
-from nltk.corpus import stopwords
-from nltk.stem import WordNetLemmatizer
+import os
+import json
+import uuid
+import pandas as pd
+
+from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi.responses import FileResponse
+
+from api.schemas import ComplaintRequest
+from api.services import predict_complaint
+
+import pandas as pd
+
+from fastapi import (
+    APIRouter,
+    UploadFile,
+    File,
+    HTTPException
+)
+
+from fastapi.responses import (
+    FileResponse
+)
+
+from api.schemas import (
+    ComplaintRequest
+)
+
+from api.services import (
+    predict_complaint
+)
 
 router = APIRouter()
 
-classifier = joblib.load("models/department_classifier.pkl")
-vectorizer = joblib.load("models/tfidf_vectorizer.pkl")
 
-stop_words = set(stopwords.words("english"))
-lemmatizer = WordNetLemmatizer()
+# =====================================
+# Health Check
+# =====================================
 
-urgency_keywords = {
-    "Critical": ["dangerous", "critical", "emergency", "accident", "burst",
-                 "fire", "flood", "collapse", "sparking", "bleeding"],
-    "High":     ["urgent", "severe", "no water", "no electricity", "broken",
-                 "overflow", "not working", "contaminated", "sick", "injured"],
-    "Medium":   ["problem", "issue", "pending", "repair", "not collected",
-                 "irregular", "delay"],
-    "Low":      ["request", "suggestion", "minor", "slowly", "when possible"]
-}
+@router.get("/health")
+def health():
 
-def clean_text(text):
-    text = str(text).lower()
-    text = re.sub(r"[^a-zA-Z\s]", "", text)
-    tokens = nltk.word_tokenize(text)
-    return " ".join([lemmatizer.lemmatize(t) for t in tokens if t not in stop_words])
+    return {
 
-def detect_urgency(text):
-    text_lower = text.lower()
-    for level in ["Critical", "High", "Medium", "Low"]:
-        for kw in urgency_keywords[level]:
-            if kw in text_lower:
-                return level
-    return "Low"
+        "status": "success",
 
-@router.post("/predict", response_model=PredictionResponse)
-def predict(req: ComplaintRequest):
-    cleaned = clean_text(req.complaint)
-    vec = vectorizer.transform([cleaned])
-    dept = classifier.predict(vec)[0]
-    conf = float(classifier.predict_proba(vec).max())
-    score = TextBlob(req.complaint).sentiment.polarity
-    sentiment = "Positive" if score > 0.1 else ("Negative" if score < -0.1 else "Neutral")
-    urgency = detect_urgency(req.complaint)
-    urgency_map = {"Critical": 40, "High": 30, "Medium": 20, "Low": 10}
-    priority = min(100, int(urgency_map[urgency] + abs(min(score, 0)) * 60))
-    keywords = [w for w in req.complaint.lower().split() if len(w) > 4][:5]
-    return PredictionResponse(
-        complaint=req.complaint, department=dept,
-        confidence=round(conf, 2), sentiment=sentiment,
-        sentiment_score=round(score, 2), urgency_level=urgency,
-        priority_score=priority, keywords=keywords
+        "department_model": "loaded",
+
+        "sentiment_model": "loaded",
+
+        "urgency_model": "loaded",
+
+        "version": "1.0.0"
+    }
+
+
+# =====================================
+# Full Prediction
+# =====================================
+
+@router.post("/predict")
+def predict_api(
+    request: ComplaintRequest
+):
+
+    result = predict_complaint(
+        request.complaint
     )
 
-@router.post("/classify")
-def classify(req: ComplaintRequest):
-    cleaned = clean_text(req.complaint)
-    vec = vectorizer.transform([cleaned])
-    return {"department": classifier.predict(vec)[0],
-            "confidence": round(float(classifier.predict_proba(vec).max()), 2)}
+    return result
+
+
+# =====================================
+# Department Prediction
+# =====================================
+
+@router.post("/department")
+def department_api(
+    request: ComplaintRequest
+):
+
+    result = predict_complaint(
+        request.complaint
+    )
+
+    return {
+
+        "department":
+            result["department"]
+    }
+
+
+# =====================================
+# Sentiment Prediction
+# =====================================
 
 @router.post("/sentiment")
-def sentiment_check(req: ComplaintRequest):
-    score = TextBlob(req.complaint).sentiment.polarity
-    label = "Positive" if score > 0.1 else ("Negative" if score < -0.1 else "Neutral")
-    return {"sentiment": label, "score": round(score, 2)}
+def sentiment_api(
+    request: ComplaintRequest
+):
+
+    result = predict_complaint(
+        request.complaint
+    )
+
+    return {
+
+        "sentiment":
+            result["sentiment"]
+    }
+
+
+# =====================================
+# Urgency Prediction
+# =====================================
+
+@router.post("/urgency")
+def urgency_api(
+    request: ComplaintRequest
+):
+
+    result = predict_complaint(
+        request.complaint
+    )
+
+    return {
+
+        "urgency":
+            result["urgency"]
+    }
+
+
+# =====================================
+# Bulk CSV Prediction
+# =====================================
+
+@router.post("/bulk-predict")
+async def bulk_predict(
+    file: UploadFile = File(...)
+):
+
+    request_id = str(
+        uuid.uuid4()
+    )
+
+    upload_path = (
+        f"uploads/{request_id}.csv"
+    )
+
+    output_path = (
+        f"outputs/{request_id}.csv"
+    )
+
+    try:
+
+        with open(
+            upload_path,
+            "wb"
+        ) as buffer:
+
+            buffer.write(
+                await file.read()
+            )
+
+        df = pd.read_csv(
+            upload_path
+        )
+
+        if "complaint" not in df.columns:
+
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "CSV must contain "
+                    "'complaint' column"
+                )
+            )
+
+        predictions = []
+
+        for complaint in df["complaint"]:
+
+            result = predict_complaint(
+                str(complaint)
+            )
+
+            predictions.append(
+                result
+            )
+
+        prediction_df = pd.DataFrame(
+            predictions
+        )
+
+        final_df = pd.concat(
+            [
+                df,
+                prediction_df
+            ],
+            axis=1
+        )
+
+        final_df.to_csv(
+            output_path,
+            index=False
+        )
+
+        return {
+
+            "request_id":
+                request_id,
+
+            "status":
+                "completed",
+
+            "download_url":
+                (
+                    f"/api/v1/"
+                    f"bulk-predict/download/"
+                    f"{request_id}"
+                )
+        }
+
+    except Exception as e:
+
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )
+
+
+# =====================================
+# Download Prediction File
+# =====================================
+
+@router.get(
+    "/bulk-predict/download/{request_id}"
+)
+def download_prediction(
+    request_id: str
+):
+
+    file_path = (
+        f"outputs/{request_id}.csv"
+    )
+
+    if not os.path.exists(
+        file_path
+    ):
+
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "Prediction file "
+                "not found"
+            )
+        )
+
+    return FileResponse(
+        path=file_path,
+        media_type="text/csv",
+        filename=f"{request_id}.csv"
+    )
+
+
+# =====================================
+# Metrics API
+# =====================================
+
+@router.get("/metrics")
+def metrics():
+
+    metrics_file = (
+        "reports/metrics.json"
+    )
+
+    if not os.path.exists(
+        metrics_file
+    ):
+
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "metrics.json "
+                "not found"
+            )
+        )
+
+    with open(
+        metrics_file,
+        "r"
+    ) as file:
+
+        return json.load(
+            file
+        )
+
+
+# =====================================
+# Model Information
+# =====================================
+
+@router.get("/model-info")
+def model_info():
+
+    metrics_file = (
+        "reports/metrics.json"
+    )
+
+    if not os.path.exists(
+        metrics_file
+    ):
+
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "metrics.json "
+                "not found"
+            )
+        )
+
+    with open(
+        metrics_file,
+        "r"
+    ) as file:
+
+        metrics = json.load(
+            file
+        )
+
+    return {
+
+        "department_model":
+            metrics.get(
+                "department_model"
+            ),
+
+        "sentiment_model":
+            metrics.get(
+                "sentiment_model"
+            ),
+
+        "urgency_model":
+            metrics.get(
+                "urgency_model"
+            ),
+
+        "version":
+            metrics.get(
+                "version"
+            )
+    }

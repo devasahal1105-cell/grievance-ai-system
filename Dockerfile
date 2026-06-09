@@ -1,14 +1,32 @@
-FROM python:3.10-slim
+# Base Image
+FROM python:3.12-slim
 
+# Set Working Directory
 WORKDIR /app
 
+# Copy Requirements First
 COPY requirements.txt .
+
+# Install Dependencies
+RUN pip install --no-cache-dir --upgrade pip
+
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Copy Entire Project
 COPY . .
 
-RUN python -c "import nltk; nltk.download('punkt'); nltk.download('stopwords'); nltk.download('wordnet'); nltk.download('punkt_tab')"
+# Create Required Directories
+RUN mkdir -p \
+    uploads \
+    outputs \
+    logs \
+    reports \
+    models/department \
+    models/sentiment \
+    models/urgency
 
-EXPOSE 7860
+# Expose FastAPI Port
+EXPOSE 8000
 
-CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7860"]
+# Start Application
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
